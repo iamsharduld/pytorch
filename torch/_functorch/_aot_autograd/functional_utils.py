@@ -9,7 +9,7 @@ This file contains utilities related to functionalization in AOTAutograd:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast, TypeGuard
+from typing import Any, cast, Protocol, TYPE_CHECKING, TypeGuard
 
 import torch
 from torch import Tensor
@@ -25,6 +25,10 @@ from torch.utils._python_dispatch import (
     is_traceable_wrapper_subclass,
     transform_subclass,
 )
+
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 aot_joint_log = getArtifactLogger(__name__, "aot_joint_graph")
@@ -336,6 +340,10 @@ def gen_alias_from_base(
             representative_view_meta_sequence = (
                 target_view_meta_sequence.representative_outer_view_meta_sequence()
             )
+            # Subclass replay intentionally fails closed. Falling back to the
+            # dense as_strided path can preserve the inner tensor view while
+            # silently dropping wrapper metadata carried in __tensor_flatten__
+            # ctx (for example DTensor placement metadata).
             if representative_view_meta_sequence is None:
                 raise NotImplementedError(
                     "AOTAutograd cannot replay aliased subclass views when wrapper "
@@ -348,11 +356,10 @@ def gen_alias_from_base(
             out = _functionalization.apply_view_meta_sequence(
                 aliased_base_tensor, representative_view_meta_sequence.sequence
             )
-            out = patch_requires_grad(out)
             if _view_meta_matches_tensor(
                 out, target_meta_tensor, target_view_meta_sequence
             ):
-                return out
+                return patch_requires_grad(out)
             raise NotImplementedError(
                 "AOTAutograd cannot replay aliased subclass views when outer "
                 "replay does not reconstruct wrapper metadata."
@@ -487,9 +494,13 @@ class ViewMetaSequence:
         return f"ViewMetaSequence({types})"
 
     def __eq__(self, other: object) -> bool:
-        # If other is None, then it probably means that we weren't able to recreate
-        # the ViewMeta sequence. One example is when we update the view metadata by
-        # calling: create_synthetic_base_metadata.
+        # WARNING: __eq__(None) is a legacy wildcard used only for debug metadata
+        # comparisons. Runtime code should use identity checks instead of !=
+        # because this comparison is intentionally asymmetric.
+        #
+        # If other is None, then it probably means that we weren't able to
+        # recreate the ViewMeta sequence. One example is when we update the
+        # view metadata by calling: create_synthetic_base_metadata.
         if other is None:
             return True
 
@@ -508,18 +519,22 @@ class ViewMetaSequence:
         return self
 
 
+class _HasAsTuple(Protocol):
+    def as_tuple(self) -> tuple[object, ...]: ...
+
+
 def _view_meta_signature(
     view_meta_sequence: ViewMetaSequence,
 ) -> tuple[tuple[type[object], tuple[object, ...]], ...]:
     return tuple(
-        (type(view_meta), cast(Any, view_meta).as_tuple())
+        (type(view_meta), cast(_HasAsTuple, view_meta).as_tuple())
         for view_meta in view_meta_sequence.sequence
     )
 
 
 @dataclass
 class SubclassViewMetaSequence:
-    attrs: dict[str, ViewMetaSequence | SubclassViewMetaSequence]
+    attrs: Mapping[str, ViewMetaSequence | SubclassViewMetaSequence]
     metadata: MetadataKey
 
     def __repr__(self) -> str:
@@ -528,8 +543,8 @@ class SubclassViewMetaSequence:
 
     def __eq__(self, other: object) -> bool:
         if other is None:
-            # Mirror ViewMetaSequence wildcard semantics for debug metadata
-            # comparisons that treat missing reconstructed view metadata as unknown.
+            # Mirror the ViewMetaSequence warning above: __eq__(None) is a
+            # debug-only wildcard and runtime code should prefer identity checks.
             # If other is None, then it probably means that we weren't able to
             # recreate the ViewMeta sequence for one of the subclass attrs.
             return True

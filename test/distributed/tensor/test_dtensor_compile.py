@@ -2803,7 +2803,8 @@ class TestDTensorCompileE2E(DTensorTestBase):
 
     @with_comms
     @parametrize("backend", ["aot_eager", "inductor"])
-    def test_compile_dtensor_output_alias_replay(self, backend):
+    @parametrize("dynamic", [False, True])
+    def test_compile_dtensor_output_alias_replay(self, backend, dynamic):
         mesh = self.build_device_mesh()
 
         def fn(x: DTensor) -> tuple[DTensor, DTensor]:
@@ -2817,38 +2818,7 @@ class TestDTensorCompileE2E(DTensorTestBase):
 
         x_local = x_local_ref.detach().clone().requires_grad_(True)
         x = DTensor.from_local(x_local, mesh, [Replicate()], run_check=False)
-        y, aux = torch.compile(fn, backend=backend, fullgraph=True)(x)
-
-        self.assertEqual(y.full_tensor(), y_ref.full_tensor())
-        self.assertEqual(aux.full_tensor(), aux_ref.full_tensor())
-        self.assertIsNotNone(aux.grad_fn)
-        self.assertTrue(aux.to_local()._is_view())
-        self.assertEqual(
-            StorageWeakRef(y.to_local().untyped_storage()),
-            StorageWeakRef(aux.to_local().untyped_storage()),
-        )
-
-        (y_ref.full_tensor().sum() + aux_ref.full_tensor().sum()).backward()
-        (y.full_tensor().sum() + aux.full_tensor().sum()).backward()
-        self.assertEqual(x_local_ref.grad, x_local.grad)
-
-    @with_comms
-    @parametrize("backend", ["aot_eager", "inductor"])
-    def test_compile_dtensor_output_alias_replay_dynamic(self, backend):
-        mesh = self.build_device_mesh()
-
-        def fn(x: DTensor) -> tuple[DTensor, DTensor]:
-            y = x + 1
-            aux = y[:, :1]
-            return y, aux
-
-        x_local_ref = torch.randn(2, 2, device=self.device_type, requires_grad=True)
-        x_ref = DTensor.from_local(x_local_ref, mesh, [Replicate()], run_check=False)
-        y_ref, aux_ref = fn(x_ref)
-
-        x_local = x_local_ref.detach().clone().requires_grad_(True)
-        x = DTensor.from_local(x_local, mesh, [Replicate()], run_check=False)
-        y, aux = torch.compile(fn, backend=backend, fullgraph=True, dynamic=True)(x)
+        y, aux = torch.compile(fn, backend=backend, fullgraph=True, dynamic=dynamic)(x)
 
         self.assertEqual(y.full_tensor(), y_ref.full_tensor())
         self.assertEqual(aux.full_tensor(), aux_ref.full_tensor())

@@ -676,9 +676,16 @@ from a multi-output view call"
                 #    operation was run on the input (base tensor), then we can
                 #    replay dense-tensor views from the saved FunctionalTensor.
                 #
+                #    If metadata mutation did happen, the runtime explicitly
+                #    reconstructs the inputs before replaying outputs, so the
+                #    fully reconstructed input may no longer be this output's
+                #    original base tensor.
+                #
                 # Metadata is collected both on the primary subclass ->
                 # subclass graph and on a later dense -> dense re-collection;
-                # only the dense pass sees `o` as a bare FunctionalTensor here.
+                # only the dense pass sees `o` as a bare FunctionalTensor here,
+                # so subclass alias-of-input replay is intentionally out of
+                # scope for this branch.
                 output_type == OutputType.alias_of_input
                 and base_idx is not None
                 and not input_info[base_idx].mutates_metadata

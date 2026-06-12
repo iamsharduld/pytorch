@@ -9810,30 +9810,33 @@ metadata incorrectly.
             return y, aux
 
         for backend in ("aot_eager", "inductor"):
-            with self.subTest(backend=backend):
-                x_ref = WrapperSubclass(torch.randn(3, 3, requires_grad=True))
-                y_ref, aux_ref = f(x_ref)
+            for dynamic in (False, True):
+                with self.subTest(backend=backend, dynamic=dynamic):
+                    x_ref = WrapperSubclass(torch.randn(3, 3, requires_grad=True))
+                    y_ref, aux_ref = f(x_ref)
 
-                x = WrapperSubclass(x_ref.a.detach().clone().requires_grad_(True))
-                torch._dynamo.reset()
-                AOTAutogradCache.clear()
-                y, aux = torch.compile(f, backend=backend, fullgraph=True)(x)
+                    x = WrapperSubclass(x_ref.a.detach().clone().requires_grad_(True))
+                    torch._dynamo.reset()
+                    AOTAutogradCache.clear()
+                    y, aux = torch.compile(
+                        f, backend=backend, fullgraph=True, dynamic=dynamic
+                    )(x)
 
-                self.assertIsInstance(y, WrapperSubclass)
-                self.assertIsInstance(aux, WrapperSubclass)
-                self.assertEqual(y_ref.a, y.a)
-                self.assertEqual(aux_ref.a, aux.a)
+                    self.assertIsInstance(y, WrapperSubclass)
+                    self.assertIsInstance(aux, WrapperSubclass)
+                    self.assertEqual(y_ref.a, y.a)
+                    self.assertEqual(aux_ref.a, aux.a)
 
-                self.assertEqual(
-                    StorageWeakRef(y.a.untyped_storage()),
-                    StorageWeakRef(aux.a.untyped_storage()),
-                )
+                    self.assertEqual(
+                        StorageWeakRef(y.a.untyped_storage()),
+                        StorageWeakRef(aux.a.untyped_storage()),
+                    )
 
-                (y_ref.sum() + aux_ref.sum()).backward()
-                (y.sum() + aux.sum()).backward()
-                self.assertIsNotNone(x_ref.grad)
-                self.assertIsNotNone(x.grad)
-                self.assertEqual(x_ref.grad.a, x.grad.a)
+                    (y_ref.sum() + aux_ref.sum()).backward()
+                    (y.sum() + aux.sum()).backward()
+                    self.assertIsNotNone(x_ref.grad)
+                    self.assertIsNotNone(x.grad)
+                    self.assertEqual(x_ref.grad.a, x.grad.a)
 
     def test_output_alias_of_intermediate_subclass_view_meta_replay(self):
         def f(x):
@@ -9842,76 +9845,44 @@ metadata incorrectly.
             return y, aux
 
         for backend in ("aot_eager", "inductor"):
-            with self.subTest(backend=backend):
-                x_ref = ConstantExtraMetadataTensor(
-                    torch.randn(3, 3, requires_grad=True)
-                )
-                y_ref, aux_ref = f(x_ref)
+            for dynamic in (False, True):
+                with self.subTest(backend=backend, dynamic=dynamic):
+                    x_ref = ConstantExtraMetadataTensor(
+                        torch.randn(3, 3, requires_grad=True)
+                    )
+                    y_ref, aux_ref = f(x_ref)
 
-                x = ConstantExtraMetadataTensor(
-                    x_ref.elem.detach().clone().requires_grad_(True)
-                )
-                torch._dynamo.reset()
-                AOTAutogradCache.clear()
-                y, aux = torch.compile(f, backend=backend, fullgraph=True)(x)
+                    x = ConstantExtraMetadataTensor(
+                        x_ref.elem.detach().clone().requires_grad_(True)
+                    )
+                    torch._dynamo.reset()
+                    AOTAutogradCache.clear()
+                    y, aux = torch.compile(
+                        f, backend=backend, fullgraph=True, dynamic=dynamic
+                    )(x)
 
-                self.assertIsInstance(y, ConstantExtraMetadataTensor)
-                self.assertIsInstance(aux, ConstantExtraMetadataTensor)
-                self.assertEqual(y_ref.elem, y.elem)
-                self.assertEqual(aux_ref.elem, aux.elem)
-                self.assertIsNotNone(aux.grad_fn)
-                self.assertIsNotNone(aux._base)
+                    self.assertIsInstance(y, ConstantExtraMetadataTensor)
+                    self.assertIsInstance(aux, ConstantExtraMetadataTensor)
+                    self.assertEqual(y_ref.elem, y.elem)
+                    self.assertEqual(aux_ref.elem, aux.elem)
+                    self.assertIsNotNone(aux_ref.grad_fn)
+                    self.assertIsNotNone(aux.grad_fn)
+                    self.assertEqual(aux.grad_fn.__class__, aux_ref.grad_fn.__class__)
+                    self.assertExpectedInline(
+                        str(aux.grad_fn.__class__), """<class 'SliceBackward0'>"""
+                    )
+                    self.assertIsNotNone(aux._base)
 
-                self.assertEqual(
-                    StorageWeakRef(y.untyped_storage()),
-                    StorageWeakRef(aux.untyped_storage()),
-                )
+                    self.assertEqual(
+                        StorageWeakRef(y.untyped_storage()),
+                        StorageWeakRef(aux.untyped_storage()),
+                    )
 
-                (y_ref.sum() + aux_ref.sum()).backward()
-                (y.sum() + aux.sum()).backward()
-                self.assertIsNotNone(x_ref.grad)
-                self.assertIsNotNone(x.grad)
-                self.assertEqual(x_ref.grad.elem, x.grad.elem)
-
-    def test_output_alias_of_intermediate_subclass_view_meta_replay_dynamic(self):
-        def f(x):
-            y = x + 1
-            aux = y[:, :1]
-            return y, aux
-
-        for backend in ("aot_eager", "inductor"):
-            with self.subTest(backend=backend):
-                x_ref = ConstantExtraMetadataTensor(
-                    torch.randn(3, 3, requires_grad=True)
-                )
-                y_ref, aux_ref = f(x_ref)
-
-                x = ConstantExtraMetadataTensor(
-                    x_ref.elem.detach().clone().requires_grad_(True)
-                )
-                torch._dynamo.reset()
-                AOTAutogradCache.clear()
-                y, aux = torch.compile(
-                    f, backend=backend, fullgraph=True, dynamic=True
-                )(x)
-
-                self.assertIsInstance(y, ConstantExtraMetadataTensor)
-                self.assertIsInstance(aux, ConstantExtraMetadataTensor)
-                self.assertEqual(y_ref.elem, y.elem)
-                self.assertEqual(aux_ref.elem, aux.elem)
-                self.assertIsNotNone(aux.grad_fn)
-                self.assertIsNotNone(aux._base)
-
-                self.assertEqual(
-                    StorageWeakRef(y.untyped_storage()),
-                    StorageWeakRef(aux.untyped_storage()),
-                )
-
-                (y_ref.sum() + aux_ref.sum()).backward()
-                (y.sum() + aux.sum()).backward()
-                self.assertIsNotNone(x_ref.grad)
-                self.assertIsNotNone(x.grad)
-                self.assertEqual(x_ref.grad.elem, x.grad.elem)
+                    (y_ref.sum() + aux_ref.sum()).backward()
+                    (y.sum() + aux.sum()).backward()
+                    self.assertIsNotNone(x_ref.grad)
+                    self.assertIsNotNone(x.grad)
+                    self.assertEqual(x_ref.grad.elem, x.grad.elem)
 
     @patch("torch._dynamo.config.assume_static_by_default", False)
     def test_output_alias_of_intermediate_subclass_view_meta_replay_automatic_dynamic_fallback(
@@ -12435,6 +12406,21 @@ class TestAOTAutogradWithCache(TestAOTAutogradWithDynamo):
                 dynamic=dynamic,
                 make_inputs_subclasses=make_inputs_subclasses,
             )
+
+    def test_output_alias_of_intermediate_subclass_view_meta_replay_dynamic_cache(
+        self,
+    ):
+        def f(x):
+            y = x + 1
+            aux = y.view(x.shape[0] * x.shape[1])
+            return y, aux
+
+        self.verify_aot_autograd(
+            f,
+            [ConstantExtraMetadataTensor(torch.randn(2, 2, requires_grad=True))],
+            dynamic=True,
+        )
+        self.assertTrue(self.inductor_cache.cache)
 
     def test_input_mutation_false_aliasing(self):
         # This test is disabled because it fails in strict cache mode
